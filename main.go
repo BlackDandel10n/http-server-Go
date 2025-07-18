@@ -1,10 +1,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
-	"net/http"
 	"log"
+	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 )
 
 
@@ -31,9 +35,44 @@ func main() {
 	logger.Println("Starting server...")
 	
 	// Server logic
-	err := http.ListenAndServe(":8080", nil)
-	if err != nil {
-		logger.Fatal("ListenAndServe ", err)
+	server := &http.Server{
+		Addr: ":8080",
+		Handler: nil,
+		ReadTimeout: 5 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout: 15 * time.Second,
 	}
 
+	// Setup channels and OS signals
+	done := make(chan bool)
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGTERM, syscall.SIGINT)
+
+	// Shutdown logic
+	go func() {
+		// Listen for quit signal
+		<- quit
+		logger.Println("Server is shutting down...")
+		
+		// Shutdown context
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second * 30)
+		defer cancel()
+
+		server.SetKeepAlivesEnabled(false)
+
+		if err := server.Shutdown(ctx); err != nil {
+			logger.Fatalf("Could not gracefully shutdown the server: %v\n", err)
+		}
+		
+		close(done)
+	}()
+
+	// Run server
+	logger.Printf("Server is ready to run on port %v", server.Addr)
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		logger.Fatalf("Could not listen on %v %v\n", server.Addr, err)
+	}
+
+	<- done
+	logger.Println("Server stopped")
 }
